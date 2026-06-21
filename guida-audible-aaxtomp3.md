@@ -2,6 +2,16 @@
 
 Guida completa per scaricare audiobook da Audible in formato `.aaxc` e convertirli in `.m4b` con capitoli e copertina embedded, usando `audible-cli` e `AAXtoMP3`.
 
+> **Nota per agenti AI (es. OpenClaw) che eseguono questa guida in autonomia:**
+> tutti i passaggi sono scriptabili e idempotenti **tranne** l'autenticazione
+> Audible iniziale (sezione 2b), che richiede una volta tanto credenziali
+> Amazon reali e la risoluzione di un captcha da parte di un umano — nessun
+> agente può completarla autonomamente. Verifica sempre prima lo stato del
+> login con il comando della sezione 2a: se è già configurato, salta
+> direttamente alla sezione 7, che contiene uno script unico, idempotente e
+> con riepilogo finale parsabile in grado di scaricare e convertire uno o
+> tutti gli audiolibri della libreria senza ulteriore intervento umano.
+
 ---
 
 ## 1. Prerequisiti di sistema
@@ -9,9 +19,12 @@ Guida completa per scaricare audiobook da Audible in formato `.aaxc` e convertir
 Installa le dipendenze necessarie:
 
 ```bash
-sudo apt install jq mediainfo ffmpeg x264 x265 bc
-sudo apt install python3-pip
+sudo apt install -y jq mediainfo ffmpeg x264 x265 bc
+sudo apt install -y python3-pip
 ```
+
+> Il flag `-y` evita il prompt di conferma interattivo, necessario per
+> eseguire questo comando in autonomia (es. da un agente AI).
 
 | Tool        | Uso                                                          |
 |-------------|--------------------------------------------------------------|
@@ -38,7 +51,26 @@ uv tool install audible-cli
 > source ~/.local/bin/env
 > ```
 
-### 2a. Autenticazione con Audible
+### 2a. Verifica se il login è già stato effettuato
+
+Prima di eseguire `audible quickstart`, controlla se esiste già un profilo
+autenticato e funzionante, per evitare di ripetere l'autenticazione
+inutilmente:
+
+```bash
+if [ -f ~/.audible/config.toml ] && audible library list >/dev/null 2>&1; then
+  echo "LOGIN_OK: profilo già autenticato e funzionante."
+else
+  echo "LOGIN_MANCANTE: eseguire 'audible quickstart' (vedi sezione 2b)."
+fi
+```
+
+- Se l'output è `LOGIN_OK`, salta la sezione 2b e procedi direttamente al
+  punto 3 (download dell'audiobook).
+- Se l'output è `LOGIN_MANCANTE`, esegui la procedura di autenticazione
+  descritta nella sezione 2b.
+
+### 2b. Autenticazione con Audible
 
 ```bash
 audible quickstart
@@ -100,16 +132,31 @@ Al termine vengono creati i file in `~/.audible/`:
 └── config.toml           # Configurazione profilo audible-cli
 ```
 
+### 2c. Test del login
+
+Verifica che l'autenticazione sia andata a buon fine elencando la libreria:
+
+```bash
+audible library list
+```
+
+- **Successo:** viene stampata una tabella/elenco di audiobook posseduti
+  (titolo, ASIN, autore...). Il login è confermato e funzionante.
+- **Fallimento:** viene restituito un errore (es. `Profile not found`,
+  errore di autenticazione/HTTP). In questo caso ripetere la sezione 2b
+  oppure verificare il contenuto di `~/.audible/config.toml`.
+
 ---
 
 ## 3. Download dell'audiobook
 
 ### 3a. Esporta la libreria (consigliato)
 
-Genera un `.tsv` con tutta la libreria. AAXtoMP3 lo usa per i metadati di serie e genere:
+Genera un `.tsv` con tutta la libreria. AAXtoMP3 lo usa per i metadati di serie e genere.
+Esegui il comando nella directory di lavoro che preferisci (funziona in qualsiasi directory):
 
 ```bash
-audible library export --output ~/Scaricati/library.tsv
+audible library export --output library.tsv
 ```
 
 ### 3b. Elenca gli audiobook disponibili
@@ -120,9 +167,10 @@ audible library list
 
 ### 3c. Scarica il file audio con tutti i metadati
 
-```bash
-cd ~/Scaricati
+Esegui il comando nella directory di lavoro scelta (i file vengono scaricati
+nella directory corrente):
 
+```bash
 audible download \
   --aaxc \
   --voucher \
@@ -146,10 +194,10 @@ audible download \
 > **Come trovare l'ASIN:** è il codice nell'URL della pagina Audible dopo `/pd/`,
 > oppure lo si legge con `audible library list`.
 
-Dopo il download avrai:
+Dopo il download avrai, nella directory corrente:
 
 ```
-~/Scaricati/
+.
 ├── B08G9PRS1K.aaxc            # Audio criptato
 ├── B08G9PRS1K.voucher          # Chiave di decrittazione (JSON)
 ├── B08G9PRS1K_1215.jpg         # Copertina alta risoluzione
@@ -161,10 +209,11 @@ Dopo il download avrai:
 ## 4. Installazione di AAXtoMP3
 
 Clona il fork `Samuel88/AAXtoMP3`, che include il fix per embedding di capitoli
-e copertina in un singolo passaggio `ffmpeg` senza dipendenze da `mp4v2-utils`:
+e copertina in un singolo passaggio `ffmpeg` senza dipendenze da `mp4v2-utils`.
+Esegui il clone nella stessa directory di lavoro usata per il download
+(o in qualsiasi altra directory, basta poi riferirsi al percorso corretto):
 
 ```bash
-cd ~/Scaricati
 git clone https://github.com/Samuel88/AAXtoMP3.git
 chmod +x AAXtoMP3/AAXtoMP3
 ```
@@ -181,9 +230,11 @@ chmod +x AAXtoMP3/AAXtoMP3
 
 ### Comando base
 
-```bash
-cd ~/Scaricati
+Esegui il comando dalla directory in cui si trovano i file scaricati al
+punto 3 (il file `.aaxc` va indicato con il percorso corretto se ti trovi
+in una directory diversa):
 
+```bash
 ./AAXtoMP3/AAXtoMP3 \
   --use-audible-cli-data \
   -e:m4b \
@@ -222,8 +273,10 @@ cd ~/Scaricati
 
 ### Struttura dell'output
 
+Relativa alla directory corrente (o a `--target_dir` se specificata):
+
 ```
-~/Scaricati/
+.
 └── Audiobook/
     └── <Genere>/
         └── <Autore>/
@@ -274,48 +327,160 @@ Output atteso: `codec_type=audio` e `codec_type=video` (la copertina).
 
 ## 7. Script di automazione
 
-Salva questo script come `~/Scaricati/audible-convert.sh` per scaricare e convertire
-in un solo comando:
+Salva questo script come `audible-convert.sh` nella directory di lavoro che
+contiene (o conterrà) la cartella `AAXtoMP3` clonata al punto 4. Lo script
+funziona indipendentemente da dove si trova questa directory: usa sempre la
+propria posizione come riferimento, non un percorso fisso.
+
+Caratteristiche pensate per l'esecuzione autonoma da parte di un agente AI:
+
+- **Preflight check**: verifica che `audible`, `ffmpeg`, `jq` esistano e che
+  il login Audible sia configurato e funzionante *prima* di fare qualsiasi
+  cosa. Se il login manca, esce immediatamente con `exit 1` e un messaggio
+  che indica di eseguire `audible quickstart` (sezione 2b, unico passaggio
+  che richiede un umano) — non tenta in alcun modo di automatizzarlo.
+- **Auto-setup di AAXtoMP3**: se la cartella `AAXtoMP3` non esiste, la clona
+  automaticamente (sezione 4 inclusa, non serve eseguirla a parte).
+- **Idempotenza**: ogni ASIN completato con successo viene marcato in
+  `.audible-convert-state/<ASIN>.done`. Rilanciare lo script (anche più
+  volte, anche in batch) salta i libri già fatti senza riscaricare o
+  riconvertire nulla.
+- **Due modalità**: un singolo ASIN, oppure `--all` per scaricare e
+  convertire automaticamente tutta la libreria Audible non ancora
+  processata (usa `audible library export` per ottenere la lista di ASIN).
+- **Isolamento errori in batch**: se un libro fallisce (download o
+  conversione), viene segnato come errore e lo script continua con i
+  successivi, invece di interrompersi.
+- **Riepilogo finale parsabile**: l'ultima riga è sempre nel formato
+  `SUMMARY completed=<N> failed=<M>`, seguita da una riga `FAILED_ASIN=<asin>`
+  per ogni libro fallito. Il codice di uscita è `0` solo se `failed=0`.
 
 ```bash
 #!/usr/bin/env bash
-# Uso:     ./audible-convert.sh <ASIN> [directory-output]
-# Esempio: ./audible-convert.sh B08G9PRS1K ~/Musica/Audiobook
+# Uso:
+#   ./audible-convert.sh <ASIN> [directory-output]   # un singolo libro
+#   ./audible-convert.sh --all [directory-output]     # tutta la libreria non ancora completata
+#
+# Esempi:
+#   ./audible-convert.sh B08G9PRS1K ~/Musica/Audiobook
+#   ./audible-convert.sh --all ~/Musica/Audiobook
+#
+# Nota: niente "set -e" globale. Ogni comando critico viene controllato
+# esplicitamente in modo da poter isolare il fallimento di un singolo
+# libro in modalità --all senza interrompere l'intero batch.
+set -uo pipefail
 
-set -euo pipefail
+WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$WORK_DIR/AAXtoMP3"
+STATE_DIR="$WORK_DIR/.audible-convert-state"
 
-ASIN="${1:?Errore: fornisci l'ASIN come primo argomento}"
-OUTPUT_DIR="${2:-$HOME/Scaricati/Audiobook}"
-WORK_DIR="$HOME/Scaricati"
-SCRIPT_DIR="$HOME/Scaricati/AAXtoMP3"
+log()  { printf '[%s] %s\n' "$1" "$2"; }
+fail() { log "ERROR" "$1"; exit 1; }
 
+# --- Preflight: dipendenze e login --------------------------------------
+
+command -v audible >/dev/null 2>&1 || fail "audible-cli non trovato. Esegui: uv tool install audible-cli"
+command -v ffmpeg  >/dev/null 2>&1 || fail "ffmpeg non trovato. Esegui: sudo apt install -y ffmpeg"
+command -v jq      >/dev/null 2>&1 || fail "jq non trovato. Esegui: sudo apt install -y jq"
+
+if [ ! -f ~/.audible/config.toml ] || ! audible library list >/dev/null 2>&1; then
+  fail "Login Audible non configurato o non funzionante. Esegui 'audible quickstart' (richiede credenziali Amazon + captcha, intervento umano obbligatorio, vedi sezione 2b della guida), poi rilancia questo script."
+fi
+
+if [ ! -x "$SCRIPT_DIR/AAXtoMP3" ]; then
+  log "INFO" "AAXtoMP3 non trovato in $SCRIPT_DIR, clono il fork"
+  git clone https://github.com/Samuel88/AAXtoMP3.git "$SCRIPT_DIR" || fail "clone di AAXtoMP3 fallito"
+  chmod +x "$SCRIPT_DIR/AAXtoMP3"
+fi
+
+mkdir -p "$STATE_DIR"
+
+# --- Argomenti -----------------------------------------------------------
+
+MODE="${1:?Errore: fornisci un ASIN oppure --all come primo argomento}"
+OUTPUT_DIR="${2:-$WORK_DIR/Audiobook}"
 mkdir -p "$OUTPUT_DIR"
-cd "$WORK_DIR"
 
-echo ">>> [1/2] Download da Audible: $ASIN"
-audible download \
-  --aaxc \
-  --voucher \
-  --cover \
-  --cover-size 1215 \
-  --chapter \
-  --filename-mode asin_ascii \
-  -a "$ASIN"
+# --- Elabora un singolo ASIN (idempotente) --------------------------------
 
-echo ">>> [2/2] Conversione in .m4b"
-"$SCRIPT_DIR/AAXtoMP3" \
-  --use-audible-cli-data \
-  -e:m4b \
-  --single \
-  --target_dir "$OUTPUT_DIR" \
-  "${ASIN}.aaxc"
+process_asin() {
+  local asin="$1"
+  local marker="$STATE_DIR/${asin}.done"
 
-echo ">>> Fatto! File salvato in: $OUTPUT_DIR"
+  if [ -f "$marker" ]; then
+    log "SKIP" "$asin: già completato in precedenza"
+    return 0
+  fi
+
+  cd "$WORK_DIR"
+
+  if [ ! -f "${asin}.aaxc" ]; then
+    log "INFO" "$asin: download in corso"
+    if ! audible download \
+        --aaxc --voucher --cover --cover-size 1215 --chapter \
+        --filename-mode asin_ascii -a "$asin"; then
+      log "ERROR" "$asin: download fallito"
+      return 1
+    fi
+  else
+    log "INFO" "$asin: file .aaxc già presente, salto il download"
+  fi
+
+  log "INFO" "$asin: conversione in .m4b"
+  if ! "$SCRIPT_DIR/AAXtoMP3" \
+      --use-audible-cli-data -e:m4b --single \
+      --target_dir "$OUTPUT_DIR" "${asin}.aaxc"; then
+    log "ERROR" "$asin: conversione fallita"
+    return 1
+  fi
+
+  touch "$marker"
+  log "OK" "$asin: completato -> $OUTPUT_DIR"
+}
+
+# --- Esecuzione: singolo ASIN o intera libreria ---------------------------
+
+FAILED=()
+DONE=0
+
+if [ "$MODE" = "--all" ]; then
+  TSV="$WORK_DIR/library.tsv"
+  audible library export --output "$TSV" || fail "esportazione libreria fallita"
+
+  ASIN_COL=$(head -1 "$TSV" | awk -F'\t' '{for(i=1;i<=NF;i++) if($i=="asin") print i}')
+  [ -n "$ASIN_COL" ] || fail "colonna 'asin' non trovata in $TSV"
+
+  while IFS=$'\t' read -r -a row; do
+    asin="${row[$((ASIN_COL-1))]}"
+    [ -n "$asin" ] || continue
+    if process_asin "$asin"; then
+      DONE=$((DONE+1))
+    else
+      FAILED+=("$asin")
+    fi
+  done < <(tail -n +2 "$TSV")
+else
+  if process_asin "$MODE"; then
+    DONE=$((DONE+1))
+  else
+    FAILED+=("$MODE")
+  fi
+fi
+
+# --- Riepilogo finale (formato fisso, parsabile da un agente) -------------
+
+echo "SUMMARY completed=$DONE failed=${#FAILED[@]}"
+for asin in "${FAILED[@]:-}"; do
+  [ -n "$asin" ] && echo "FAILED_ASIN=$asin"
+done
+
+[ "${#FAILED[@]}" -eq 0 ]
 ```
 
 ```bash
-chmod +x ~/Scaricati/audible-convert.sh
+chmod +x ./audible-convert.sh
 
-# Uso
-~/Scaricati/audible-convert.sh B08G9PRS1K ~/Musica/Audiobook
+# Uso (eseguito dalla directory in cui si trova lo script)
+./audible-convert.sh B08G9PRS1K ~/Musica/Audiobook   # un solo libro
+./audible-convert.sh --all ~/Musica/Audiobook         # tutta la libreria
 ```
