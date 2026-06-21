@@ -173,36 +173,43 @@ nella directory corrente):
 ```bash
 audible download \
   --aaxc \
-  --voucher \
   --cover \
   --cover-size 1215 \
   --chapter \
-  --filename-mode asin_ascii \
+  --filename-mode asin_only \
+  --no-confirm \
   -a <ASIN>
 ```
 
 | Flag                         | Descrizione                                              |
 |------------------------------|----------------------------------------------------------|
-| `--aaxc`                     | Scarica il file audio criptato `.aaxc`                   |
-| `--voucher`                  | Scarica il `.voucher` con chiave/iv di decrittazione     |
+| `--aaxc`                     | Scarica il file audio criptato `.aaxc` **e il `.voucher`** con chiave/iv di decrittazione (non esiste un flag `--voucher` separato: è incluso automaticamente da `--aaxc`) |
 | `--cover`                    | Scarica la copertina `.jpg`                              |
 | `--cover-size 1215`          | Risoluzione copertina (1215x1215 px, la più alta)        |
 | `--chapter`                  | Scarica il `.json` con i metadati dei capitoli           |
-| `--filename-mode asin_ascii` | Usa ASIN come nome file (più stabile del titolo)         |
+| `--filename-mode asin_only`  | Usa l'ASIN (senza titolo) come prefisso del nome file, es. `<ASIN>-AAX_44_128.aaxc`. Il suffisso `-AAX_44_128` (qualità/codec) **non è eliminabile** e può variare: non assumere mai il nome file esatto, usa sempre un glob `<ASIN>*.aaxc` per trovarlo. Attenzione: `asin_ascii` produce invece `<ASIN>_<titolo-ascii>...aaxc`, ancora più imprevedibile |
+| `--no-confirm` (`-y`)        | Salta il prompt di conferma interattivo, necessario per esecuzione autonoma |
 | `-a <ASIN>`                  | ASIN del libro (es. `B08G9PRS1K`)                        |
 
 > **Come trovare l'ASIN:** è il codice nell'URL della pagina Audible dopo `/pd/`,
 > oppure lo si legge con `audible library list`.
 
-Dopo il download avrai, nella directory corrente:
+Dopo il download avrai, nella directory corrente (il suffisso `-AAX_44_128`
+dipende dalla qualità scaricata e può variare, non è garantito sia sempre
+questo):
 
 ```
 .
-├── B08G9PRS1K.aaxc            # Audio criptato
-├── B08G9PRS1K.voucher          # Chiave di decrittazione (JSON)
-├── B08G9PRS1K_1215.jpg         # Copertina alta risoluzione
-└── B08G9PRS1K-chapters.json    # Metadati capitoli
+├── B08G9PRS1K-AAX_44_128.aaxc     # Audio criptato
+├── B08G9PRS1K-AAX_44_128.voucher  # Chiave di decrittazione (JSON), incluso da --aaxc
+├── B08G9PRS1K_(1215).jpg          # Copertina alta risoluzione
+└── B08G9PRS1K-chapters.json       # Metadati capitoli
 ```
+
+> **Importante per script/automazione:** non assumere mai il nome esatto del
+> file `.aaxc`/`.voucher`. Usa sempre un glob come `<ASIN>*.aaxc` per
+> individuarlo, perché il suffisso di qualità/codec cambia e non è sotto il
+> tuo controllo.
 
 ---
 
@@ -231,15 +238,16 @@ chmod +x AAXtoMP3/AAXtoMP3
 ### Comando base
 
 Esegui il comando dalla directory in cui si trovano i file scaricati al
-punto 3 (il file `.aaxc` va indicato con il percorso corretto se ti trovi
-in una directory diversa):
+punto 3. Il nome esatto del file `.aaxc` include un suffisso di
+qualità/codec non prevedibile (es. `-AAX_44_128`): verificalo prima con
+`ls B08G9PRS1K*.aaxc` invece di assumerlo:
 
 ```bash
 ./AAXtoMP3/AAXtoMP3 \
   --use-audible-cli-data \
   -e:m4b \
   --single \
-  B08G9PRS1K.aaxc
+  B08G9PRS1K-AAX_44_128.aaxc
 ```
 
 | Flag                     | Descrizione                                                        |
@@ -256,7 +264,7 @@ in una directory diversa):
   -e:m4b \
   --single \
   --target_dir ~/Musica/Audiobook \
-  B08G9PRS1K.aaxc
+  B08G9PRS1K-AAX_44_128.aaxc
 ```
 
 ### Con naming scheme personalizzato
@@ -268,7 +276,7 @@ in una directory diversa):
   --single \
   --dir-naming-scheme '$artist/$title' \
   --file-naming-scheme '$title' \
-  B08G9PRS1K.aaxc
+  B08G9PRS1K-AAX_44_128.aaxc
 ```
 
 ### Struttura dell'output
@@ -414,22 +422,33 @@ process_asin() {
 
   cd "$WORK_DIR"
 
-  if [ ! -f "${asin}.aaxc" ]; then
+  # Il nome reale del file .aaxc include un suffisso di qualità/codec
+  # imprevedibile (es. "-AAX_44_128") anche con --filename-mode asin_only:
+  # non va mai assunto, va sempre cercato con un glob.
+  local aaxc_file
+  aaxc_file=$(ls "${asin}"*.aaxc 2>/dev/null | head -n1 || true)
+
+  if [ -z "$aaxc_file" ]; then
     log "INFO" "$asin: download in corso"
     if ! audible download \
-        --aaxc --voucher --cover --cover-size 1215 --chapter \
-        --filename-mode asin_ascii -a "$asin"; then
+        --aaxc --cover --cover-size 1215 --chapter \
+        --filename-mode asin_only --no-confirm -a "$asin"; then
       log "ERROR" "$asin: download fallito"
       return 1
     fi
+    aaxc_file=$(ls "${asin}"*.aaxc 2>/dev/null | head -n1 || true)
+    if [ -z "$aaxc_file" ]; then
+      log "ERROR" "$asin: nessun file .aaxc trovato dopo il download"
+      return 1
+    fi
   else
-    log "INFO" "$asin: file .aaxc già presente, salto il download"
+    log "INFO" "$asin: file .aaxc già presente ($aaxc_file), salto il download"
   fi
 
-  log "INFO" "$asin: conversione in .m4b"
+  log "INFO" "$asin: conversione in .m4b ($aaxc_file)"
   if ! "$SCRIPT_DIR/AAXtoMP3" \
       --use-audible-cli-data -e:m4b --single \
-      --target_dir "$OUTPUT_DIR" "${asin}.aaxc"; then
+      --target_dir "$OUTPUT_DIR" "$aaxc_file"; then
     log "ERROR" "$asin: conversione fallita"
     return 1
   fi
